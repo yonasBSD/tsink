@@ -568,7 +568,7 @@ impl Storage for StorageImpl {
                     for (labels, points) in partition_results {
                         results_map
                             .entry(labels)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .extend(points);
                     }
                 }
