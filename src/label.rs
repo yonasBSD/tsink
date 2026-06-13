@@ -120,7 +120,7 @@ pub fn unmarshal_metric_name(marshaled: &[u8]) -> crate::Result<(String, Vec<Lab
     }
 
     let metric = String::from_utf8(bytes[pos..pos + metric_len].to_vec())
-        .map_err(|e| TsinkError::Utf8(e))?;
+        .map_err(TsinkError::Utf8)?;
     pos += metric_len;
 
     // Read labels
@@ -138,7 +138,7 @@ pub fn unmarshal_metric_name(marshaled: &[u8]) -> crate::Result<(String, Vec<Lab
             break;
         }
         let name = String::from_utf8(bytes[pos..pos + name_len].to_vec())
-            .map_err(|e| TsinkError::Utf8(e))?;
+            .map_err(TsinkError::Utf8)?;
         pos += name_len;
 
         // Read label value length
@@ -153,7 +153,7 @@ pub fn unmarshal_metric_name(marshaled: &[u8]) -> crate::Result<(String, Vec<Lab
             break;
         }
         let value = String::from_utf8(bytes[pos..pos + value_len].to_vec())
-            .map_err(|e| TsinkError::Utf8(e))?;
+            .map_err(TsinkError::Utf8)?;
         pos += value_len;
 
         labels.push(Label::new(name, value));

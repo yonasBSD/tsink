@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -92,7 +92,7 @@ impl MemoryPartition {
             let (name, metric) = (entry.key(), entry.value());
 
             // Get current position in file
-            let offset = data_file.seek(SeekFrom::Current(0))?;
+            let offset = data_file.stream_position()?;
 
             // Encode metric data
             let mut encoder = GorillaEncoder::new(&mut data_file);
@@ -100,7 +100,7 @@ impl MemoryPartition {
             encoder.flush()?;
 
             // Add to metadata
-            let name_string = String::from_utf8_lossy(&name).into_owned();
+            let name_string = String::from_utf8_lossy(name).into_owned();
             metrics_map.insert(
                 name_string.clone(),
                 DiskMetric {
@@ -147,11 +147,10 @@ impl crate::partition::Partition for MemoryPartition {
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok();
 
-        if is_first_insert {
-            if let Some(min) = rows.iter().map(|r| r.data_point.timestamp).min() {
+        if is_first_insert
+            && let Some(min) = rows.iter().map(|r| r.data_point.timestamp).min() {
                 self.min_t.store(min, Ordering::SeqCst);
             }
-        }
 
         let mut outdated_rows = Vec::new();
         let mut max_timestamp = rows[0].data_point.timestamp;
@@ -291,7 +290,7 @@ impl crate::partition::Partition for MemoryPartition {
             encoder.flush()?;
 
             // Add to metadata
-            let name_string = String::from_utf8_lossy(&name).into_owned();
+            let name_string = String::from_utf8_lossy(name).into_owned();
             metrics_map.insert(
                 name_string.clone(),
                 DiskMetric {

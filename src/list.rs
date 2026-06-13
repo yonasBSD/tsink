@@ -38,14 +38,13 @@ impl PartitionList {
         let mut head = self.head.write();
 
         // Check if removing head
-        if let Some(head_node) = head.clone() {
-            if Self::same_partitions(&head_node.partition, target) {
+        if let Some(head_node) = head.clone()
+            && Self::same_partitions(&head_node.partition, target) {
                 *head = head_node.next.read().clone();
                 self.num_partitions.fetch_sub(1, Ordering::SeqCst);
                 target.clean()?;
                 return Ok(());
             }
-        }
 
         // Search for the node to remove
         let current = head.clone();
@@ -55,8 +54,8 @@ impl PartitionList {
         while let Some(node) = current {
             let next_opt = node.next.read().clone();
 
-            if let Some(ref next_node) = next_opt {
-                if Self::same_partitions(&next_node.partition, target) {
+            if let Some(ref next_node) = next_opt
+                && Self::same_partitions(&next_node.partition, target) {
                     // Remove next node
                     let new_next = next_node.next.read().clone();
                     *node.next.write() = new_next;
@@ -64,7 +63,6 @@ impl PartitionList {
                     target.clean()?;
                     return Ok(());
                 }
-            }
 
             current = next_opt;
         }
@@ -79,8 +77,8 @@ impl PartitionList {
         let mut head = self.head.write();
 
         // Check if swapping head
-        if let Some(head_node) = head.clone() {
-            if Self::same_partitions(&head_node.partition, old) {
+        if let Some(head_node) = head.clone()
+            && Self::same_partitions(&head_node.partition, old) {
                 let new_node = Arc::new(PartitionNode {
                     partition: new,
                     next: RwLock::new(head_node.next.read().clone()),
@@ -88,7 +86,6 @@ impl PartitionList {
                 *head = Some(new_node);
                 return Ok(());
             }
-        }
 
         // Search for the node to swap
         let current = head.clone();
@@ -98,8 +95,8 @@ impl PartitionList {
         while let Some(node) = current {
             let next_opt = node.next.read().clone();
 
-            if let Some(ref next_node) = next_opt {
-                if Self::same_partitions(&next_node.partition, old) {
+            if let Some(ref next_node) = next_opt
+                && Self::same_partitions(&next_node.partition, old) {
                     // Swap next node
                     let new_node = Arc::new(PartitionNode {
                         partition: new,
@@ -108,7 +105,6 @@ impl PartitionList {
                     *node.next.write() = Some(new_node);
                     return Ok(());
                 }
-            }
 
             current = next_opt;
         }

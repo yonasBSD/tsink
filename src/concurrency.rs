@@ -63,15 +63,14 @@ impl Semaphore {
     /// Tries to acquire a permit without blocking.
     pub fn try_acquire(&self) -> Option<SemaphoreGuard<'_>> {
         let current = self.permits.load(Ordering::Acquire);
-        if current > 0 {
-            if self
+        if current > 0
+            && self
                 .permits
                 .compare_exchange(current, current - 1, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 return Some(SemaphoreGuard { semaphore: self });
             }
-        }
         None
     }
 

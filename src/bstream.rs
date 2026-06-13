@@ -119,11 +119,10 @@ impl BitStreamReader {
 
     /// Reads a single bit.
     pub fn read_bit(&mut self) -> io::Result<bool> {
-        if self.valid == 0 {
-            if !self.load_next_buffer(1) {
+        if self.valid == 0
+            && !self.load_next_buffer(1) {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF"));
             }
-        }
         self.read_bit_fast()
     }
 
@@ -140,11 +139,10 @@ impl BitStreamReader {
 
     /// Reads multiple bits.
     pub fn read_bits(&mut self, nbits: u8) -> io::Result<u64> {
-        if self.valid == 0 {
-            if !self.load_next_buffer(nbits) {
+        if self.valid == 0
+            && !self.load_next_buffer(nbits) {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF"));
             }
-        }
 
         if nbits <= self.valid {
             return self.read_bits_fast(nbits);
