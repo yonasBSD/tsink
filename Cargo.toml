@@ -38,7 +38,6 @@ tracing = "0.1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3.14"
