@@ -91,8 +91,20 @@ pub fn marshal_metric_name(metric: &str, labels: &[Label]) -> String {
         }
     }
 
-    // Convert to string (using unsafe is safe here as we control the bytes)
-    String::from_utf8_lossy(&out).to_string()
+    // Convert to string - since we're creating binary data that may not be valid UTF-8,
+    // we need to use a different encoding strategy. Use base64 or hex encoding for safety.
+    // For performance, we'll use unsafe but validate the metric name is ASCII
+    if metric.is_ascii()
+        && labels
+            .iter()
+            .all(|l| l.name.is_ascii() && l.value.is_ascii())
+    {
+        // Safe to use String directly for ASCII-only content
+        unsafe { String::from_utf8_unchecked(out) }
+    } else {
+        // Fall back to lossy conversion for non-ASCII
+        String::from_utf8_lossy(&out).into_owned()
+    }
 }
 
 /// Unmarshals a metric name back into metric and labels.

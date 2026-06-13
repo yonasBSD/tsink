@@ -502,7 +502,8 @@ impl Storage for StorageImpl {
         let mut all_points = Vec::new();
 
         for partition in self.partition_list.iter() {
-            if partition.min_timestamp() == 0 {
+            // Skip only if partition is truly empty (size == 0)
+            if partition.size() == 0 {
                 continue; // Skip empty partition
             }
 
@@ -524,14 +525,6 @@ impl Storage for StorageImpl {
                 Err(TsinkError::NoDataPoints { .. }) => continue,
                 Err(e) => return Err(e),
             }
-        }
-
-        if all_points.is_empty() {
-            return Err(TsinkError::NoDataPoints {
-                metric: metric.to_string(),
-                start,
-                end,
-            });
         }
 
         Ok(all_points)

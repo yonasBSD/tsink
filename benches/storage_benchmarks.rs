@@ -83,7 +83,6 @@ fn bench_select_among_million_points(c: &mut Criterion) {
         .unwrap();
 
     // Insert 1 million data points in batches
-    println!("Preparing 1 million data points...");
     for batch in 0..1000 {
         let rows: Vec<Row> = (0..1000)
             .map(|i| {
@@ -97,13 +96,11 @@ fn bench_select_among_million_points(c: &mut Criterion) {
 
         storage.insert_rows(&rows).unwrap();
     }
-    println!("Data preparation complete");
 
     // Verify we actually have 1M points
-    let all_points = storage
+    let _all_points = storage
         .select("million_metric", &[], 1600000000, 1700000000)
         .unwrap();
-    println!("Actually stored {} points", all_points.len());
 
     c.bench_function("select_1M_points", |b| {
         b.iter(|| {

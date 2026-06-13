@@ -304,11 +304,24 @@ impl WalReader {
         });
 
         // Read each segment
+        let mut failed_segments = Vec::new();
         for segment_path in segments {
-            if let Err(e) = self.read_segment(&segment_path) {
-                // Log error but continue - segment might be partially written
-                warn!("Error reading WAL segment {:?}: {}", segment_path, e);
+            match self.read_segment(&segment_path) {
+                Ok(_) => {}
+                Err(e) => {
+                    // Track failed segments for potential recovery
+                    warn!("Error reading WAL segment {:?}: {}", segment_path, e);
+                    failed_segments.push((segment_path.clone(), e));
+                }
             }
+        }
+
+        // If too many segments failed, return an error
+        if failed_segments.len() > 1 {
+            return Err(TsinkError::Wal {
+                operation: "recovery".to_string(),
+                details: format!("{} WAL segments failed to load", failed_segments.len()),
+            });
         }
 
         Ok(self.rows_to_insert)
@@ -317,20 +330,63 @@ impl WalReader {
     /// Reads a single WAL segment.
     fn read_segment(&mut self, path: &Path) -> Result<()> {
         let file = File::open(path)?;
+        let file_len = file.metadata()?.len();
+
+        // Skip empty or suspiciously small files
+        if file_len < 8 {
+            warn!(
+                "Skipping WAL segment {:?}: file too small ({} bytes)",
+                path, file_len
+            );
+            return Ok(());
+        }
+
         let mut reader = BufReader::new(file);
+        let mut bytes_read = 0u64;
+
+        let mut corrupted_entries = 0;
+        const MAX_CORRUPTED: usize = 5;
 
         loop {
+            // Track position for error recovery
+            let entry_start = bytes_read;
+
             // Read operation type
             let mut op_buf = [0u8; 1];
             match reader.read_exact(&mut op_buf) {
-                Ok(_) => {}
+                Ok(_) => bytes_read += 1,
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    warn!("WAL read error at byte {}: {}", bytes_read, e);
+                    corrupted_entries += 1;
+                    if corrupted_entries > MAX_CORRUPTED {
+                        return Err(TsinkError::Wal {
+                            operation: "segment_read".to_string(),
+                            details: format!("Too many corrupted entries in {:?}", path),
+                        });
+                    }
+                    break;
+                }
             }
 
-            let op = WalOperation::from_u8(op_buf[0]).ok_or_else(|| {
-                TsinkError::Other(format!("Unknown WAL operation: {}", op_buf[0]))
-            })?;
+            let op = match WalOperation::from_u8(op_buf[0]) {
+                Some(op) => op,
+                None => {
+                    warn!(
+                        "Unknown WAL operation {} at byte {}",
+                        op_buf[0], entry_start
+                    );
+                    corrupted_entries += 1;
+                    if corrupted_entries > MAX_CORRUPTED {
+                        return Err(TsinkError::Wal {
+                            operation: "segment_read".to_string(),
+                            details: format!("Too many corrupted entries in {:?}", path),
+                        });
+                    }
+                    // Try to skip to next valid entry
+                    continue;
+                }
+            };
 
             match op {
                 WalOperation::Insert => {

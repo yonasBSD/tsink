@@ -86,6 +86,9 @@ pub enum TsinkError {
     #[error("Memory map error at {path:?}: {details}")]
     MemoryMap { path: PathBuf, details: String },
 
+    #[error("Invalid offset {offset} exceeds maximum {max}")]
+    InvalidOffset { offset: u64, max: u64 },
+
     #[error("WAL error: {operation} failed: {details}")]
     Wal { operation: String, details: String },
 

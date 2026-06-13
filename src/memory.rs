@@ -141,11 +141,12 @@ impl crate::partition::Partition for MemoryPartition {
         self.wal.append_rows(rows)?;
 
         // Set min timestamp on first insert
-        if self
+        let is_first_insert = self
             .min_t_set
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
+            .is_ok();
+
+        if is_first_insert {
             if let Some(min) = rows.iter().map(|r| r.data_point.timestamp).min() {
                 self.min_t.store(min, Ordering::SeqCst);
             }
@@ -154,10 +155,11 @@ impl crate::partition::Partition for MemoryPartition {
         let mut outdated_rows = Vec::new();
         let mut max_timestamp = rows[0].data_point.timestamp;
         let mut rows_added = 0usize;
+        let min_t = self.min_t.load(Ordering::SeqCst);
 
         for row in rows {
-            // Check if row is outdated
-            if row.data_point().timestamp < self.min_t.load(Ordering::SeqCst) {
+            // Check if row is outdated (skip this check on first insert)
+            if !is_first_insert && row.data_point().timestamp < min_t {
                 outdated_rows.push(row.clone());
                 continue;
             }
@@ -191,23 +193,33 @@ impl crate::partition::Partition for MemoryPartition {
         // Update counters
         self.num_points.fetch_add(rows_added, Ordering::SeqCst);
 
-        // Update max timestamp atomically
+        // Update max timestamp atomically with exponential backoff
+        let mut retries = 0;
         loop {
             let current_max = self.max_t.load(Ordering::Acquire);
             if max_timestamp <= current_max {
                 break;
             }
-            if self
-                .max_t
-                .compare_exchange_weak(
-                    current_max,
-                    max_timestamp,
-                    Ordering::Release,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                break;
+            match self.max_t.compare_exchange_weak(
+                current_max,
+                max_timestamp,
+                Ordering::Release,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(_) => {
+                    retries += 1;
+                    if retries <= 3 {
+                        // Exponential backoff: 1, 2, 4 iterations
+                        for _ in 0..(1 << (retries - 1)) {
+                            std::hint::spin_loop();
+                        }
+                    } else {
+                        // After 3 retries, yield to scheduler
+                        std::thread::yield_now();
+                        retries = 0; // Reset counter after yield
+                    }
+                }
             }
         }
 
@@ -349,11 +361,11 @@ impl MemoryMetric {
         }
 
         // Not the first insertion - normal path
-        // Check if point is in order
-        let points = self.points.read();
+        // Use upgradeable read lock to avoid lock thrashing
+        let points = self.points.upgradable_read();
         if !points.is_empty() && points[points.len() - 1].timestamp < point.timestamp {
-            drop(points);
-            let mut points = self.points.write();
+            // Upgrade to write lock only when needed
+            let mut points = parking_lot::RwLockUpgradableReadGuard::upgrade(points);
             points.push(point);
             self.max_timestamp.store(point.timestamp, Ordering::SeqCst);
             self.size.fetch_add(1, Ordering::SeqCst);

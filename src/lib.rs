@@ -1,8 +1,6 @@
 //! tsink - A lightweight embedded time-series database
 //!
 //! tsink is a Rust implementation of a time-series storage engine with a straightforward API.
-//! It provides goroutine-safe capabilities for writing into and reading from a TSDB that
-//! partitions data points by time.
 
 pub mod bstream;
 pub mod cgroup;
