@@ -135,7 +135,6 @@ fn test_out_of_order_inserts() {
 }
 
 #[test]
-#[ignore] // TODO: Flaky - needs investigation
 fn test_concurrent_writes() {
     // Use in-memory storage for more reliable testing
     let storage = Arc::new(

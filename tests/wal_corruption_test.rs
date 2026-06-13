@@ -93,7 +93,6 @@ fn test_wal_with_incomplete_writes() {
 }
 
 #[test]
-#[ignore] // TODO: WAL format edge case - needs investigation
 fn test_wal_with_invalid_operations() {
     let temp_dir = TempDir::new().unwrap();
     let wal_dir = temp_dir.path().join("wal");
@@ -169,7 +168,6 @@ fn test_wal_with_multiple_corrupted_segments() {
 }
 
 #[test]
-#[ignore] // TODO: WAL format edge case - needs investigation
 fn test_wal_with_empty_segments() {
     let temp_dir = TempDir::new().unwrap();
     let wal_dir = temp_dir.path().join("wal");

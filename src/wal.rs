@@ -3,12 +3,13 @@
 use crate::label::{marshal_metric_name, unmarshal_metric_name};
 use crate::{DataPoint, Result, Row, TsinkError};
 use parking_lot::Mutex;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// WAL operation types.
 #[repr(u8)]
@@ -67,6 +68,20 @@ impl Wal for NopWal {
     }
 }
 
+const WAL_SEGMENT_EXTENSION: &str = ".wal";
+
+fn parse_segment_index(name: &OsStr) -> Option<u32> {
+    let name = name.to_str()?;
+    let trimmed = name
+        .strip_suffix(WAL_SEGMENT_EXTENSION)
+        .unwrap_or(name)
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<u32>().ok()
+}
+
 /// Disk-based WAL implementation.
 pub struct DiskWal {
     dir: PathBuf,
@@ -99,8 +114,8 @@ impl DiskWal {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries {
                 if let Ok(entry) = entry
-                    && let Some(name) = entry.file_name().to_str()
-                    && let Ok(index) = name.parse::<u32>()
+                    && entry.path().is_file()
+                    && let Some(index) = parse_segment_index(&entry.file_name())
                 {
                     max_index = max_index.max(index);
                 }
@@ -113,7 +128,9 @@ impl DiskWal {
     /// Creates a new segment file.
     fn create_segment_file(&self) -> Result<(PathBuf, File)> {
         let index = self.segment_index.fetch_add(1, Ordering::SeqCst);
-        let path = self.dir.join(index.to_string());
+        let path = self
+            .dir
+            .join(format!("{:06}{}", index, WAL_SEGMENT_EXTENSION));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok((path, file))
     }
@@ -146,24 +163,16 @@ impl DiskWal {
             let path = entry.path();
 
             if path.is_file()
-                && let Some(name) = path.file_name()
+                && let Some(index) = path.file_name().and_then(|name| parse_segment_index(name))
             {
-                // Check if it's a valid segment file (numeric name)
-                if name.to_string_lossy().parse::<u32>().is_ok() {
-                    segments.push(path);
-                }
+                segments.push((index, path));
             }
         }
 
         // Sort by numeric value
-        segments.sort_by_key(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0)
-        });
+        segments.sort_by_key(|(index, _)| *index);
 
-        Ok(segments)
+        Ok(segments.into_iter().map(|(_, path)| path).collect())
     }
 }
 
@@ -284,27 +293,30 @@ impl WalReader {
                 let path = entry.path();
 
                 if path.is_file()
-                    && let Some(name) = path.file_name()
+                    && let Some(index) = path.file_name().and_then(|name| parse_segment_index(name))
                 {
-                    // Check if it's a valid segment file (numeric name)
-                    if name.to_string_lossy().parse::<u32>().is_ok() {
-                        segments.push(path);
-                    }
+                    segments.push((index, path));
                 }
             }
         }
 
         // Sort by numeric value
-        segments.sort_by_key(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0)
-        });
+        segments.sort_by_key(|(index, _)| *index);
 
         // Read each segment
         let mut failed_segments = Vec::new();
-        for segment_path in segments {
+        debug!(
+            segments = segments.len(),
+            wal_dir = %self.dir.display(),
+            "Recovering WAL segments"
+        );
+
+        for (index, segment_path) in segments {
+            debug!(
+                segment_index = index,
+                segment = %segment_path.display(),
+                "Reading WAL segment"
+            );
             match self.read_segment(&segment_path) {
                 Ok(_) => {}
                 Err(e) => {
@@ -371,6 +383,12 @@ impl WalReader {
             let op = match WalOperation::from_u8(op_buf[0]) {
                 Some(op) => op,
                 None => {
+                    debug!(
+                        wal_segment = %path.display(),
+                        byte_offset = entry_start,
+                        opcode = op_buf[0],
+                        "Unknown WAL opcode encountered"
+                    );
                     warn!(
                         "Unknown WAL operation {} at byte {}",
                         op_buf[0], entry_start
@@ -432,7 +450,7 @@ impl WalReader {
 impl WalOperation {
     fn from_u8(value: u8) -> Option<Self> {
         match value {
-            0 => Some(WalOperation::Insert),
+            0 | 1 => Some(WalOperation::Insert),
             _ => None,
         }
     }

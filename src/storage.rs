@@ -182,6 +182,7 @@ impl StorageBuilder {
             workers_semaphore: Arc::new(Semaphore::new(self.max_writers)),
             closing: Arc::new(AtomicBool::new(false)),
             memory_partitions: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            partition_creation_lock: Arc::new(parking_lot::Mutex::new(())),
         });
 
         // Load existing partitions from disk if data path is set
@@ -219,6 +220,7 @@ struct StorageImpl {
     workers_semaphore: Arc<Semaphore>,
     closing: Arc<AtomicBool>,
     memory_partitions: Arc<parking_lot::Mutex<Vec<Arc<MemoryPartition>>>>,
+    partition_creation_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl StorageImpl {
@@ -316,6 +318,14 @@ impl StorageImpl {
     }
 
     fn ensure_active_head(&self) -> Result<()> {
+        if let Some(head) = self.partition_list.get_head()
+            && head.active()
+        {
+            return Ok(());
+        }
+
+        let _guard = self.partition_creation_lock.lock();
+
         if let Some(head) = self.partition_list.get_head()
             && head.active()
         {
@@ -457,6 +467,7 @@ impl StorageImpl {
             workers_semaphore: self.workers_semaphore.clone(),
             closing: self.closing.clone(),
             memory_partitions: self.memory_partitions.clone(),
+            partition_creation_lock: self.partition_creation_lock.clone(),
         })
     }
 }
@@ -566,10 +577,7 @@ impl Storage for StorageImpl {
             match partition.select_all_labels(metric, start, end) {
                 Ok(partition_results) => {
                     for (labels, points) in partition_results {
-                        results_map
-                            .entry(labels)
-                            .or_default()
-                            .extend(points);
+                        results_map.entry(labels).or_default().extend(points);
                     }
                 }
                 Err(TsinkError::NoDataPoints { .. }) => continue,

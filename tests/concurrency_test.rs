@@ -5,7 +5,6 @@ use tempfile::TempDir;
 use tsink::{DataPoint, Label, Row, StorageBuilder};
 
 #[test]
-#[ignore] // TODO: Needs investigation
 fn test_high_contention_concurrent_writes() {
     let temp_dir = TempDir::new().unwrap();
     let storage = Arc::new(

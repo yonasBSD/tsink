@@ -71,6 +71,31 @@ impl MemoryPartition {
             .clone()
     }
 
+    fn update_min_timestamp(&self, timestamp: i64) {
+        loop {
+            let current = self.min_t.load(Ordering::Acquire);
+
+            if current != 0 && current <= timestamp {
+                break;
+            }
+
+            let desired = if current == 0 {
+                timestamp
+            } else {
+                timestamp.min(current)
+            };
+
+            if self
+                .min_t
+                .compare_exchange(current, desired, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.min_t_set.store(1, Ordering::Release);
+                break;
+            }
+        }
+    }
+
     /// Encodes all points in the partition to a writer and returns metadata.
     pub fn flush_to_disk(
         &self,
@@ -141,28 +166,11 @@ impl crate::partition::Partition for MemoryPartition {
         // Write to WAL first
         self.wal.append_rows(rows)?;
 
-        // Set min timestamp on first insert
-        let is_first_insert = self
-            .min_t_set
-            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok();
-
-        if is_first_insert && let Some(min) = rows.iter().map(|r| r.data_point.timestamp).min() {
-            self.min_t.store(min, Ordering::SeqCst);
-        }
-
         let mut outdated_rows = Vec::new();
-        let mut max_timestamp = rows[0].data_point.timestamp;
+        let mut max_timestamp = i64::MIN;
         let mut rows_added = 0usize;
-        let min_t = self.min_t.load(Ordering::SeqCst);
 
         for row in rows {
-            // Check if row is outdated (skip this check on first insert)
-            if !is_first_insert && row.data_point().timestamp < min_t {
-                outdated_rows.push(row.clone());
-                continue;
-            }
-
             // Validate and handle zero timestamp
             let timestamp = if row.data_point().timestamp == 0 {
                 let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
@@ -175,6 +183,17 @@ impl crate::partition::Partition for MemoryPartition {
             } else {
                 row.data_point().timestamp
             };
+
+            let current_min = self.min_t.load(Ordering::Acquire);
+            if current_min != 0 && timestamp < current_min {
+                let diff = current_min.saturating_sub(timestamp);
+                if diff > self.partition_duration {
+                    outdated_rows.push(row.clone());
+                    continue;
+                }
+            }
+
+            self.update_min_timestamp(timestamp);
 
             if timestamp > max_timestamp {
                 max_timestamp = timestamp;
@@ -189,34 +208,45 @@ impl crate::partition::Partition for MemoryPartition {
             rows_added += 1;
         }
 
+        if !outdated_rows.is_empty() {
+            tracing::debug!(
+                count = outdated_rows.len(),
+                partition_min = self.min_t.load(Ordering::Relaxed),
+                partition_duration = self.partition_duration,
+                "memory_partition_outdated_rows"
+            );
+        }
+
         // Update counters
         self.num_points.fetch_add(rows_added, Ordering::SeqCst);
 
-        // Update max timestamp atomically with exponential backoff
-        let mut retries = 0;
-        loop {
-            let current_max = self.max_t.load(Ordering::Acquire);
-            if max_timestamp <= current_max {
-                break;
-            }
-            match self.max_t.compare_exchange_weak(
-                current_max,
-                max_timestamp,
-                Ordering::Release,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(_) => {
-                    retries += 1;
-                    if retries <= 3 {
-                        // Exponential backoff: 1, 2, 4 iterations
-                        for _ in 0..(1 << (retries - 1)) {
-                            std::hint::spin_loop();
+        if rows_added > 0 {
+            // Update max timestamp atomically with exponential backoff
+            let mut retries = 0;
+            loop {
+                let current_max = self.max_t.load(Ordering::Acquire);
+                if max_timestamp <= current_max {
+                    break;
+                }
+                match self.max_t.compare_exchange_weak(
+                    current_max,
+                    max_timestamp,
+                    Ordering::Release,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(_) => {
+                        retries += 1;
+                        if retries <= 3 {
+                            // Exponential backoff: 1, 2, 4 iterations
+                            for _ in 0..(1 << (retries - 1)) {
+                                std::hint::spin_loop();
+                            }
+                        } else {
+                            // After 3 retries, yield to scheduler
+                            std::thread::yield_now();
+                            retries = 0; // Reset counter after yield
                         }
-                    } else {
-                        // After 3 retries, yield to scheduler
-                        std::thread::yield_now();
-                        retries = 0; // Reset counter after yield
                     }
                 }
             }
