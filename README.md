@@ -369,7 +369,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tsink.git
+git clone https://github.com/h2337/tsink.git
 cd tsink
 
 # Run tests
